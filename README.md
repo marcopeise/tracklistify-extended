@@ -11,126 +11,183 @@
 
 # Tracklistify Extended
 
-> Extended fork of [betmoar/tracklistify](https://github.com/betmoar/tracklistify) with multi-source comparison (set79, 1001tracklists), consolidated tracklists, and enhanced deduplication.
+> Extended fork of [betmoar/tracklistify](https://github.com/betmoar/tracklistify) with multi-source comparison, consolidated tracklists, and enhanced deduplication.
 
-A powerful and flexible automatic tracklist generator for DJ mixes and audio streams. Identifies tracks in your mixes using multiple providers (Shazam, ACRCloud) and generates formatted playlists with high accuracy.
+A powerful automatic tracklist generator for DJ mixes. Identifies tracks using multiple audio fingerprinting providers and cross-references with external tracklist sources for maximum accuracy.
+
+## What's New in Extended
+
+- **Multi-Source Comparison** - Cross-reference with set79.com and 1001tracklists.com
+- **Consolidated Tracklist** - Best-guess tracklist merging all sources with deduplication
+- **Side-by-Side Comparison** - See what each source detected at each timestamp
+- **Precision/Recall Metrics** - Evaluate detection accuracy against reference sources
+- **BPM Analysis** - Automatic BPM detection via librosa
+- **MusicBrainz Verification** - Verify track metadata against MusicBrainz database
+- **Interactive Cleanup** - Manage cache, segments, and output files
 
 ## Key Features
 
-### 🎵 **Multi-Provider Track Identification**
+### Multi-Provider Track Identification
 
-  - Shazam and ACRCloud integration
-  - Smart provider fallback system
-  - High accuracy with confidence scoring
-  - Support for multiple platforms (YouTube, Mixcloud, SoundCloud)
+| Provider | Method | Auth Required |
+|----------|--------|---------------|
+| Shazam | shazamio library | No |
+| ACRCloud | REST API + HMAC-SHA1 | Yes |
+| AcoustID | pyacoustid + chromaprint | Yes |
 
-### 📊 **Versatile Output Formats**
+- Smart provider fallback system
+- Auto-disable failing providers
+- Confidence scoring per track
 
-  - JSON with detailed metadata
-  - Markdown formatted tracklists
-  - M3U playlists
-  - CSV and XML exports
-  - Rekordbox compatible format
+### External Source Integration
 
-### 🚀 **Advanced Processing**
+| Source | Method |
+|--------|--------|
+| set79.com | Automatic URL lookup |
+| 1001tracklists.com | Local HTML file (Cloudflare protected) |
 
-  - Automatic format conversion
-  - Batch processing for multiple files
-  - Intelligent caching system
-  - Progress tracking with detailed status
-  - Configurable audio quality settings
+### Output Formats
 
-### ⚙️ **Robust Architecture**
-
-  - Asynchronous processing
-  - Smart rate limiting
-  - Advanced error recovery
-  - Comprehensive logging system
-  - Docker support
+- Markdown with consolidated tracklist and comparison tables
+- JSON with detailed metadata
+- M3U playlists
+- CSV and XML exports
+- Rekordbox compatible format
 
 ## Requirements
 
 - Python 3.11 or higher
 - ffmpeg
-- git
-- uv (package and project manager)
-
-### Important Note:
-
-- Tracklistify is managed by uv, so you will need to install it.
-- Follow the [uv installation guide](https://docs.astral.sh/uv/getting-started/installation/) for your platform.
+- uv (package manager) - [Installation guide](https://docs.astral.sh/uv/getting-started/installation/)
 
 ## Quick Start
 
-### **1. Installation**
+### 1. Installation
 
-   ```bash
-   # Clone the repository
-   git clone https://github.com/marcopeise/tracklistify-extended.git
-   cd tracklistify-extended
+```bash
+git clone https://github.com/marcopeise/tracklistify-extended.git
+cd tracklistify-extended
+uv sync
+```
 
-   # Install dependencies using uv
-   uv sync
-   ```
+### 2. Configuration
 
-### **2. Configuration**
+```bash
+cp .env.example .env
+# Edit .env with your API keys (ACRCloud, AcoustID)
+```
 
-   ```bash
-   # Copy example environment file
-   cp .env.example .env
-   ```
+### 3. Basic Usage
 
-### **3. Basic Usage**
+```bash
+# Identify tracks from YouTube
+uv run tracklistify "https://youtube.com/watch?v=example"
 
-   ```bash
-   # Identify tracks in a file or URL
-   uv run tracklistify <input>
-
-   # Examples:
-   tracklistify path/to/mix.mp3
-   tracklistify https://youtube.com/watch?v=example
-   ```
+# Identify from local file
+uv run tracklistify path/to/mix.mp3
+```
 
 ## Advanced Usage
+
+### External Sources
+
+```bash
+# With 1001tracklists (save page as HTML first due to Cloudflare)
+uv run tracklistify --1001tracklists "saved-page.html" "https://youtube.com/watch?v=example"
+
+# set79 is checked automatically if the URL exists in their database
+```
+
+### Provider Selection
+
+```bash
+# Use specific provider
+uv run tracklistify --provider shazam input.mp3
+
+# Disable fallback to other providers
+uv run tracklistify --provider shazam --no-fallback input.mp3
+```
+
+### Segment Handling
+
+```bash
+# Keep segments after analysis (default)
+uv run tracklistify input.mp3
+
+# Delete segments immediately after analysis
+uv run tracklistify --delete-segments input.mp3
+```
 
 ### Output Formats
 
 ```bash
-# Specify output format
-tracklistify -f json input.mp3    # JSON output
-tracklistify -f markdown input.mp3 # Markdown output
-tracklistify -f m3u input.mp3     # M3U playlist
-tracklistify -f csv input.mp3     # CSV export
-tracklistify -f all input.mp3     # Generate all formats
+uv run tracklistify -f json input.mp3      # JSON output
+uv run tracklistify -f markdown input.mp3  # Markdown output
+uv run tracklistify -f m3u input.mp3       # M3U playlist
+uv run tracklistify -f csv input.mp3       # CSV export
+uv run tracklistify -f all input.mp3       # All formats
 ```
 
-### Batch Processing
+### Cleanup Command
 
 ```bash
-# Process multiple files
-tracklistify -b path/to/folder/*.mp3
+# Interactive mode - select what to clean
+uv run tracklistify clean -i
 
-# With specific output format
-tracklistify -b -f json path/to/folder/*.mp3
+# Clean specific targets
+uv run tracklistify clean --cache      # Download and identification cache
+uv run tracklistify clean --segments   # Audio segments
+uv run tracklistify clean --output     # Output files
+uv run tracklistify clean --logs       # Log files
+uv run tracklistify clean --all        # Everything
+
+# Preview without deleting
+uv run tracklistify clean --dry-run --all
+
+# Skip confirmation
+uv run tracklistify clean --force --cache
 ```
 
-### Additional Options
+## Output Example
 
-```bash
-# Show progress with detailed status
-tracklistify --progress input.mp3
+The Markdown output includes:
 
-# Specify provider
-tracklistify --provider shazam input.mp3
+### Consolidated Tracklist
 
-# Set output directory
-tracklistify -o path/to/output input.mp3
+Best-guess tracklist with source attribution and deduplication:
+
 ```
+1. **00:00:00** - Artist - Track Title [set79, 1001tracklists]
+2. **00:03:20** - Artist - Track Title [shazam, acrcloud] _(100%, 123 BPM)_
+```
+
+### Comparison Table
+
+Side-by-side view of what each source detected:
+
+| # | Time | Shazam | ACRCloud | set79 | 1001tracklists |
+|---|------|--------|----------|-------|----------------|
+| 1 | 00:00:00 | -- | -- | Track A | Track A |
+| 2 | 00:03:20 | Track B | Track B | -- | -- |
+
+### Metrics
+
+Precision, Recall, and F1-Score per source against a reference.
+
+## Known Limitations
+
+| Issue | Workaround |
+|-------|------------|
+| 1001tracklists Cloudflare | Save page as HTML, use `--1001tracklists file.html` |
+| AcoustID low recall | Expected for DJ mixes - fingerprints rarely match |
+| set79 not found | Only works if mix URL exists in their database |
 
 ## Contributing
 
-Contributions are welcome! Please read our [Contributing Guide](docs/CONTRIBUTING.md) for details on our code of conduct and the process for submitting pull requests.
+Contributions are welcome! Please read our [Contributing Guide](docs/CONTRIBUTING.md) for details.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License - see [LICENSE](LICENSE) for details.
+
+Original work by [betmoar](https://github.com/betmoar/tracklistify).
