@@ -211,8 +211,22 @@ class TrackComparison:
             )
         self._built = False
 
+    def _source_has_no_cue_times(self, source: str) -> bool:
+        """Check if a source has no meaningful cue times (all 00:00:00).
+
+        Returns True if >90% of tracks have time 00:00:00.
+        """
+        tracks = self._source_tracks.get(source, [])
+        if not tracks:
+            return False
+        zero_count = sum(1 for t in tracks if t.time_to_seconds() == 0)
+        return zero_count / len(tracks) > 0.9
+
     def build(self) -> List[ComparisonRow]:
         """Build the comparison table by aligning tracks from all sources.
+
+        Sources without cue times (all 00:00:00) are matched by artist/title
+        instead of time proximity.
 
         Returns:
             List of ComparisonRow objects
@@ -220,10 +234,23 @@ class TrackComparison:
         if self._built:
             return self._rows
 
-        # Collect all unique time slots
+        # Detect sources with no cue times
+        no_cue_sources: Set[str] = set()
+        for source in self.SOURCES:
+            if self._source_has_no_cue_times(source):
+                no_cue_sources.add(source)
+                logger.info(
+                    f"{source}: No cue times available "
+                    f"({len(self._source_tracks[source])} tracks, all 00:00:00). "
+                    f"Will use name-based matching."
+                )
+
+        # Collect time slots only from sources WITH cue times
         all_times: List[Tuple[int, str, str]] = []  # (seconds, time_str, source)
 
         for source, tracks in self._source_tracks.items():
+            if source in no_cue_sources:
+                continue  # Skip sources without cue times for slot creation
             for track in tracks:
                 seconds = track.time_to_seconds()
                 all_times.append((seconds, track.time_in_mix, source))
@@ -238,7 +265,6 @@ class TrackComparison:
 
         # Group into time slots
         slots: List[Tuple[int, str]] = []  # (representative_seconds, representative_time)
-        used_times: Set[int] = set()
 
         for seconds, time_str, _ in all_times:
             # Check if this time belongs to an existing slot
@@ -266,6 +292,9 @@ class TrackComparison:
 
             # Find tracks from each source that belong to this slot
             for source in self.SOURCES:
+                if source in no_cue_sources:
+                    continue  # Handle these separately below
+
                 best_track = None
                 best_distance = float("inf")
 
@@ -279,6 +308,44 @@ class TrackComparison:
 
             if row.has_any_track():
                 self._rows.append(row)
+
+        # Now match sources without cue times by artist/title against
+        # tracks already placed in slots
+        for source in no_cue_sources:
+            used_tracks: Set[int] = set()  # indices of matched tracks
+
+            for row in self._rows:
+                # Get all non-None tracks in this row from other sources
+                other_tracks = [
+                    t for s, t in row.tracks.items()
+                    if t is not None and s != source
+                ]
+                if not other_tracks:
+                    continue
+
+                # Find the best matching track from the no-cue source
+                best_match = None
+                best_idx = -1
+                for idx, track in enumerate(self._source_tracks[source]):
+                    if idx in used_tracks:
+                        continue
+                    for other in other_tracks:
+                        if self._tracks_match(track, other):
+                            best_match = track
+                            best_idx = idx
+                            break
+                    if best_match:
+                        break
+
+                if best_match and best_idx >= 0:
+                    row.tracks[source] = best_match
+                    used_tracks.add(best_idx)
+
+            matched = len(used_tracks)
+            total = len(self._source_tracks[source])
+            logger.info(
+                f"{source}: Matched {matched}/{total} tracks by name"
+            )
 
         self._built = True
         return self._rows

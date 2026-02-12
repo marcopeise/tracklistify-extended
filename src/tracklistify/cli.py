@@ -114,9 +114,11 @@ def clean_command(args: argparse.Namespace) -> int:
             if getattr(args, "segments", False):
                 targets.append("temp")  # "temp" directory contains audio segments
 
-            # If no specific targets, default to cache, output, logs (NOT segments)
+            # If no specific targets, use interactive selection
             if not targets:
-                targets = ["cache", "output", "logs"]
+                targets = manager.interactive_select()
+                if not targets:
+                    return 0  # User cancelled or nothing selected
 
         # Perform cleanup (skip confirmation in interactive mode - already confirmed)
         bytes_freed, num_cleaned = manager.clean(

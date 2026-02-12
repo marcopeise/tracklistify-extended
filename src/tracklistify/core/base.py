@@ -310,6 +310,15 @@ class AsyncApp:
             # Always clean up temporary files
             await self.cleanup()
 
+    def _get_input_hash(self, file_path: str) -> str:
+        """Generate a short hash from the input file path or URL.
+
+        Uses the original URL if available, otherwise the file path.
+        This ensures segments from different inputs are stored separately.
+        """
+        source = self.original_url or file_path
+        return hashlib.sha256(source.encode()).hexdigest()[:16]
+
     def split_audio(self, file_path: str) -> List[AudioSegment]:
         """Split audio file into overlapping segments for analysis."""
         self.logger.info(f"Splitting audio file: {file_path}")
@@ -342,9 +351,14 @@ class AsyncApp:
         overlap_duration = self.config.overlap_duration
         step = segment_duration - overlap_duration
 
-        # Create temp directory for segments
-        temp_dir = Path(self.config.temp_dir)
+        # Create input-specific temp directory so segments from different
+        # inputs don't collide (segment filenames are generic like
+        # segment_0_90.mp3 and would be reused from a previous run)
+        input_hash = self._get_input_hash(file_path)
+        temp_dir = Path(self.config.temp_dir) / input_hash
         temp_dir.mkdir(parents=True, exist_ok=True)
+        self._current_temp_dir = temp_dir
+        self.logger.debug(f"Segment temp dir: {temp_dir} (input hash: {input_hash})")
 
         # Optimize ffmpeg settings for faster processing
         base_cmd = [
@@ -533,7 +547,8 @@ class AsyncApp:
         try:
             # Check if we should keep segments
             keep_segments = getattr(self.config, "keep_segments", False)
-            temp_dir = Path(self.config.temp_dir)
+            # Use the input-specific temp dir if available, else the base temp dir
+            temp_dir = getattr(self, "_current_temp_dir", None) or Path(self.config.temp_dir)
 
             if keep_segments and temp_dir.exists():
                 self.logger.info(f"Keeping audio segments in: {temp_dir}")

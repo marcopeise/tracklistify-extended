@@ -223,9 +223,11 @@ class TracklistMerger:
 
             ext_time = self._time_str_to_seconds(ext_track.time_in_mix)
 
-            # Check time window
-            if abs(own_time - ext_time) > self.time_window:
-                continue
+            # Skip time check if external track has no cue time (00:00:00)
+            # In that case, match by artist/title only
+            if ext_time != 0:
+                if abs(own_time - ext_time) > self.time_window:
+                    continue
 
             # Check artist/title similarity
             if self._tracks_are_similar(own_track, ext_track):
@@ -258,9 +260,10 @@ class TracklistMerger:
 
             ext_time = self._time_str_to_seconds(ext_track.time_in_mix)
 
-            # Check time window
-            if abs(target_time - ext_time) > self.time_window:
-                continue
+            # Skip time check if either track has no cue time (00:00:00)
+            if target_time != 0 and ext_time != 0:
+                if abs(target_time - ext_time) > self.time_window:
+                    continue
 
             # Check artist/title similarity
             if self._external_tracks_are_similar(target, ext_track):
@@ -285,8 +288,10 @@ class TracklistMerger:
         for merged_track in merged:
             merged_time = merged_track.time_to_seconds()
 
-            if abs(ext_time - merged_time) > self.time_window:
-                continue
+            # Skip time check if external track has no cue time (00:00:00)
+            if ext_time != 0:
+                if abs(ext_time - merged_time) > self.time_window:
+                    continue
 
             if self._strings_are_similar(
                 ext_track.artist, merged_track.artist
