@@ -25,6 +25,13 @@ class Track:
     time_in_mix: str
     confidence: float
     config: Optional["TrackIdentificationConfig"] = None
+    providers: Optional[List[str]] = None
+    bpm: Optional[float] = None
+    bpm_outlier: bool = False
+    verified_by_db: bool = False
+    sources: Optional[List[str]] = None  # Sources that confirmed this track
+    external_only: bool = False  # True if only found in external sources
+    unconfirmed: bool = False  # True if only found in own identification
 
     def __str__(self) -> str:
         return (
@@ -33,7 +40,12 @@ class Track:
         )
 
     def is_similar_to(self, other: "Track") -> bool:
-        """Check if two tracks are similar based on the configuration."""
+        """Check if two tracks are similar based on the configuration.
+
+        Supports fuzzy matching: tracks with the same base title
+        (ignoring remix/edit/version suffixes) and same artist
+        are considered similar.
+        """
         if not self.config:
             from tracklistify.config.factory import get_config
 
@@ -45,21 +57,48 @@ class Track:
         def normalize(s: str) -> str:
             return re.sub(r"[^\w\s]", "", s.lower())
 
-        this_song = normalize(self.song_name)
+        def base_title(s: str) -> str:
+            """Remove remix/edit/version suffixes for fuzzy comparison."""
+            s = re.sub(
+                r"\s*\(.*?(remix|edit|mix|version|dub|remaster).*?\)\s*$",
+                "",
+                s,
+                flags=re.IGNORECASE,
+            )
+            s = re.sub(
+                r"\s*\[.*?(remix|edit|mix|version|dub|remaster).*?\]\s*$",
+                "",
+                s,
+                flags=re.IGNORECASE,
+            )
+            return normalize(s)
+
         this_artist = normalize(self.artist)
-        other_song = normalize(other.song_name)
         other_artist = normalize(other.artist)
 
         # Check for exact matches of both song and artist
-        if this_song == other_song and this_artist == other_artist:
+        if normalize(self.song_name) == normalize(other.song_name) and this_artist == other_artist:
             return True
 
-        # Tracks are NOT similar if they have different songs or artists
-        # regardless of time proximity
+        # Fuzzy match: same base title + same artist (Original vs. Remix)
+        if base_title(self.song_name) == base_title(other.song_name) and this_artist == other_artist:
+            return True
+
         return False
 
     def __init__(
-        self, song_name: str, artist: str, time_in_mix: str, confidence: float
+        self,
+        song_name: str,
+        artist: str,
+        time_in_mix: str,
+        confidence: float,
+        providers: Optional[List[str]] = None,
+        bpm: Optional[float] = None,
+        bpm_outlier: bool = False,
+        verified_by_db: bool = False,
+        sources: Optional[List[str]] = None,
+        external_only: bool = False,
+        unconfirmed: bool = False,
     ):
         """Initialize track with validation."""
         # Validate inputs
@@ -82,6 +121,13 @@ class Track:
         self.artist = artist.strip()
         self.time_in_mix = time_in_mix
         self.confidence = float(confidence)
+        self.providers = providers or []
+        self.bpm = bpm
+        self.bpm_outlier = bpm_outlier
+        self.verified_by_db = verified_by_db
+        self.sources = sources or []
+        self.external_only = external_only
+        self.unconfirmed = unconfirmed
 
         # Initialize config
         from tracklistify.config.factory import get_config
@@ -134,7 +180,8 @@ class TrackMatcher:
         self.tracks: List[Track] = []
         config = get_config()
         self.time_threshold = config.time_threshold
-        self._min_confidence = 0  # Keep all tracks with confidence > 0
+        # Use config min_confidence (0-1 scale) converted to 0-100 scale
+        self._min_confidence = config.min_confidence * 100
         self.max_duplicates = config.max_duplicates
         self._config = config
 
@@ -222,8 +269,43 @@ class TrackMatcher:
                     unique_tracks.remove(existing_track)
                     unique_tracks.append(track)
 
-        # Sort final list by time in mix
-        return sorted(unique_tracks, key=lambda t: t.time_to_seconds())
+        # Sort by time in mix
+        result = sorted(unique_tracks, key=lambda t: t.time_to_seconds())
+
+        # Apply minimum track duration filter
+        result = self.filter_by_duration(result)
+
+        return result
+
+    def filter_by_duration(self, tracks: List[Track]) -> List[Track]:
+        """Remove tracks that were played for less than min_track_duration.
+
+        Calculates 'play time' as the difference to the next track's
+        start time. The last track is always kept.
+        """
+        min_duration = getattr(self._config, "min_track_duration", 0)
+        if min_duration <= 0 or len(tracks) <= 1:
+            return tracks
+
+        filtered = []
+        for i, track in enumerate(tracks):
+            if i < len(tracks) - 1:
+                play_duration = (
+                    tracks[i + 1].time_to_seconds() - track.time_to_seconds()
+                )
+            else:
+                # Always keep the last track
+                play_duration = min_duration
+
+            if play_duration >= min_duration:
+                filtered.append(track)
+            else:
+                logger.debug(
+                    f"Filtered short track: {track.song_name} "
+                    f"(played {play_duration}s < {min_duration}s minimum)"
+                )
+
+        return filtered
 
     def process_file(self, audio_file: Path) -> List[Track]:
         """

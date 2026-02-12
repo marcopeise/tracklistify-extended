@@ -3,10 +3,13 @@
 # Standard library imports
 import asyncio
 import concurrent.futures
+import hashlib
+import json
+import shutil
 import traceback
 from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import List, Optional, Tuple
 
 # Local/package imports
 from tracklistify.config.factory import get_config
@@ -15,9 +18,11 @@ from tracklistify.core.types import AudioSegment
 from tracklistify.downloaders import DownloaderFactory
 from tracklistify.exporters import TracklistOutput
 from tracklistify.providers.factory import create_provider_factory
+from tracklistify.utils.external_sources import ExternalSourceFetcher
 from tracklistify.utils.identification import IdentificationManager
 from tracklistify.utils.logger import get_logger
 from tracklistify.utils.strings import sanitizer
+from tracklistify.utils.tracklist_merger import TracklistMerger
 from tracklistify.utils.validation import validate_input
 
 logger = get_logger(__name__)
@@ -40,14 +45,68 @@ class AsyncApp:
             config=self.config, provider_factory=self.provider_factory
         )
 
+        # External source integration
+        self.external_fetcher = ExternalSourceFetcher()
+        self.tracklist_merger = TracklistMerger()
+
+        # Store the original URL for external source lookup
+        self.original_url: Optional[str] = None
+
     def shutdown(self) -> None:
         """Shutdown the application gracefully."""
         self.logger.info("Shutting down...")
         self.shutdown_event.set()
         self.executor.shutdown(wait=True)
 
-    async def process_input(self, input_path: str):
-        """Process input URL or file path."""
+    def _get_cache_path(self, url: str) -> Path:
+        """Get the cache base path for a URL (without extension)."""
+        url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
+        cache_downloads = Path(self.config.cache_dir) / "downloads"
+        cache_downloads.mkdir(parents=True, exist_ok=True)
+        return cache_downloads / url_hash
+
+    def _check_download_cache(self, url: str) -> Optional[Tuple[str, dict]]:
+        """Check if a URL has been previously downloaded and cached.
+
+        Returns (audio_file_path, metadata_dict) if cached, None otherwise.
+        """
+        cache_base = self._get_cache_path(url)
+        audio_file = cache_base.with_suffix(".mp3")
+        meta_file = cache_base.with_suffix(".json")
+        if audio_file.exists() and meta_file.exists():
+            try:
+                metadata = json.loads(meta_file.read_text(encoding="utf-8"))
+                self.logger.info(f"Found cached download: {audio_file}")
+                return str(audio_file), metadata
+            except Exception as e:
+                self.logger.warning(f"Failed to read cache metadata: {e}")
+        return None
+
+    def _save_to_download_cache(
+        self, url: str, audio_path: str, metadata: dict
+    ) -> None:
+        """Save a downloaded file and its metadata to the cache."""
+        try:
+            cache_base = self._get_cache_path(url)
+            shutil.copy2(audio_path, cache_base.with_suffix(".mp3"))
+            cache_base.with_suffix(".json").write_text(
+                json.dumps(metadata, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            self.logger.info(f"Cached download to: {cache_base.with_suffix('.mp3')}")
+        except Exception as e:
+            self.logger.warning(f"Failed to cache download: {e}")
+
+    async def process_input(
+        self, input_path: str, *, direct_1001_url: Optional[str] = None
+    ):
+        """Process input URL or file path.
+
+        Args:
+            input_path: URL or path to audio file
+            direct_1001_url: Optional direct URL to 1001tracklists page
+        """
+        self._direct_1001_url = direct_1001_url
         try:
             # Validate input (URL or local file path)
             validated_result = validate_input(input_path)
@@ -56,6 +115,10 @@ class AsyncApp:
 
             validated_path, is_local_file = validated_result
             self.logger.info(f"Validated input: {validated_path}")
+
+            # Store original URL for external source lookup
+            if not is_local_file:
+                self.original_url = validated_path
 
             if is_local_file:
                 # Local file processing
@@ -71,38 +134,99 @@ class AsyncApp:
                 self.uploader = "Unknown artist"
                 self.duration = 0
             else:
-                # URL processing - download the file
-                downloader = self.downloader_factory.create_downloader(validated_path)
-                if downloader is None:
-                    raise ValueError("Failed to create downloader")
-                self.logger.info("Downloading audio...")
-                local_path = await downloader.download(validated_path)
-                if local_path is None:
-                    raise ValueError("local_path cannot be None")
-                self.logger.info(f"Downloaded audio to: {local_path}")
-
-                # Store metadata for output
-                metadata = getattr(downloader, "get_last_metadata", lambda: None)()
-                if metadata:
-                    self.logger.debug(f"yt-dlp metadata keys: {list(metadata.keys())}")
-                    self.original_title = sanitizer(metadata.get("title", ""))
-                    self.uploader = sanitizer(metadata.get("uploader", ""))
+                # URL processing — check cache first, then download
+                cached = self._check_download_cache(validated_path)
+                if cached:
+                    local_path, metadata = cached
+                    self.logger.info(
+                        f"Using cached download (skipping download): {local_path}"
+                    )
+                    self.original_title = sanitizer(
+                        metadata.get("title", Path(local_path).stem)
+                    )
+                    self.uploader = sanitizer(
+                        metadata.get("uploader", "Unknown artist")
+                    )
                     try:
                         self.duration = float(metadata.get("duration", 0))
                     except (TypeError, ValueError):
                         self.duration = 0
                 else:
-                    self.logger.debug("No metadata available, using fallback values")
-                    self.original_title = sanitizer(
-                        getattr(downloader, "title", Path(local_path).stem)
+                    # Not cached — download the file
+                    downloader = self.downloader_factory.create_downloader(
+                        validated_path
                     )
-                    self.uploader = sanitizer(
-                        getattr(downloader, "uploader", "Unknown artist")
+                    if downloader is None:
+                        raise ValueError("Failed to create downloader")
+                    self.logger.info("Downloading audio...")
+                    local_path = await downloader.download(validated_path)
+                    if local_path is None:
+                        raise ValueError("local_path cannot be None")
+                    self.logger.info(f"Downloaded audio to: {local_path}")
+
+                    # Store metadata for output
+                    metadata = getattr(
+                        downloader, "get_last_metadata", lambda: None
+                    )()
+                    if metadata:
+                        self.logger.debug(
+                            f"yt-dlp metadata keys: {list(metadata.keys())}"
+                        )
+                        self.original_title = sanitizer(
+                            metadata.get("title", "")
+                        )
+                        self.uploader = sanitizer(
+                            metadata.get("uploader", "")
+                        )
+                        try:
+                            self.duration = float(
+                                metadata.get("duration", 0)
+                            )
+                        except (TypeError, ValueError):
+                            self.duration = 0
+                    else:
+                        self.logger.debug(
+                            "No metadata available, using fallback values"
+                        )
+                        metadata = {}
+                        self.original_title = sanitizer(
+                            getattr(
+                                downloader, "title", Path(local_path).stem
+                            )
+                        )
+                        self.uploader = sanitizer(
+                            getattr(
+                                downloader, "uploader", "Unknown artist"
+                            )
+                        )
+                        try:
+                            self.duration = float(
+                                getattr(downloader, "duration", 0)
+                            )
+                        except (TypeError, ValueError):
+                            self.duration = 0
+                        metadata = {
+                            "title": self.original_title,
+                            "uploader": self.uploader,
+                            "duration": self.duration,
+                        }
+
+                    # Save to cache for future runs
+                    cache_metadata = {
+                        "title": metadata.get(
+                            "title", self.original_title
+                        ),
+                        "uploader": metadata.get(
+                            "uploader", self.uploader
+                        ),
+                        "duration": metadata.get(
+                            "duration", self.duration
+                        ),
+                        "url": validated_path,
+                    }
+                    self._save_to_download_cache(
+                        validated_path, local_path, cache_metadata
                     )
-                    try:
-                        self.duration = float(getattr(downloader, "duration", 0))
-                    except (TypeError, ValueError):
-                        self.duration = 0
 
             self.logger.info("Processing audio...")
 
@@ -133,10 +257,45 @@ class AsyncApp:
             self.logger.info(f"Identified {len(tracks)} tracks")
             self.logger.debug(f"Tracks: {tracks}")
 
+            # Fetch external tracklists and merge with own results
+            if self.original_url:
+                self.logger.info("Fetching external tracklists for comparison...")
+                try:
+                    external_results = await self.external_fetcher.fetch_all(
+                        url=self.original_url,
+                        artist=self.uploader or "Unknown",
+                        title=self.original_title or "Unknown",
+                        direct_1001_url=getattr(self, "_direct_1001_url", None),
+                    )
+
+                    # Merge own tracks with external sources
+                    merged_tracks = self.tracklist_merger.merge(tracks, external_results)
+
+                    # Convert merged tracks back to Track objects for output
+                    tracks = [mt.to_track() for mt in merged_tracks]
+
+                    self.logger.info(
+                        f"After merge: {len(tracks)} tracks "
+                        f"(external sources: {', '.join(external_results.keys())})"
+                    )
+                except Exception as e:
+                    self.logger.warning(
+                        f"External source fetch/merge failed, using own results: {e}"
+                    )
+                    # Continue with own tracks only
+            else:
+                self.logger.debug(
+                    "Skipping external sources (local file or no URL available)"
+                )
+
             # Only save if we have identified tracks
             self.logger.info("Saving output...")
             if len(tracks) > 0:
-                await self.save_output(tracks, self.config.output_format)
+                await self.save_output(
+                    tracks,
+                    self.config.output_format,
+                    merger=self.tracklist_merger if self.original_url else None,
+                )
             else:
                 raise ValueError(
                     "No tracks were successfully identified with sufficient confidence"
@@ -313,12 +472,15 @@ class AsyncApp:
             self.logger.error(f"Failed to process segments: {e}")
             return []
 
-    async def save_output(self, tracks: List["Track"], format: str):
+    async def save_output(
+        self, tracks: List["Track"], format: str, merger=None
+    ):
         """Save identified tracks to output files.
 
         Args:
             tracks: List of identified tracks
             format: Output format (json, markdown, m3u)
+            merger: Optional TracklistMerger with raw data for comparison table
 
         Raises:
             ValueError: If tracks list is empty
@@ -345,7 +507,7 @@ class AsyncApp:
 
         try:
             # Create output handler
-            output = TracklistOutput(mix_info=mix_info, tracks=tracks)
+            output = TracklistOutput(mix_info=mix_info, tracks=tracks, merger=merger)
 
             # Save in specified format
             if format == "all":
@@ -369,9 +531,14 @@ class AsyncApp:
     async def cleanup(self):
         """Cleanup resources"""
         try:
-            # Clean up temp directory
+            # Check if we should keep segments
+            keep_segments = getattr(self.config, "keep_segments", False)
             temp_dir = Path(self.config.temp_dir)
-            if temp_dir.exists():
+
+            if keep_segments and temp_dir.exists():
+                self.logger.info(f"Keeping audio segments in: {temp_dir}")
+            elif temp_dir.exists():
+                # Clean up temp directory
                 # First try to remove all files
                 for file in temp_dir.glob("*"):
                     try:

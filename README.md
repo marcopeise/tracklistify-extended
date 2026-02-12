@@ -2,16 +2,16 @@
 
 <div align="center">
 
-[![GitHub stars](https://img.shields.io/github/stars/betmoar/tracklistify?style=social)](https://github.com/betmoar/tracklistify/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](docs/CONTRIBUTING.md)
-[![Made with ❤️](https://img.shields.io/badge/Made%20with-❤️-red.svg)](https://github.com/betmoar/tracklistify)
 
-### [Changelog](docs/CHANGELOG.md) · [Issues](https://github.com/betmoar/tracklistify/issues) · [Contributing](docs/CONTRIBUTING.md)
+### [Changelog](docs/CHANGELOG.md) · [Issues](https://github.com/marcopeise/tracklistify-extended/issues) · [Contributing](docs/CONTRIBUTING.md)
 
 </div>
 
-# Tracklistify
+# Tracklistify Extended
+
+> Extended fork of [betmoar/tracklistify](https://github.com/betmoar/tracklistify) with multi-source comparison (set79, 1001tracklists), consolidated tracklists, and enhanced deduplication.
 
 A powerful and flexible automatic tracklist generator for DJ mixes and audio streams. Identifies tracks in your mixes using multiple providers (Shazam, ACRCloud) and generates formatted playlists with high accuracy.
 
@@ -66,8 +66,8 @@ A powerful and flexible automatic tracklist generator for DJ mixes and audio str
 
    ```bash
    # Clone the repository
-   git clone https://github.com/betmoar/tracklistify.git
-   cd tracklistify
+   git clone https://github.com/marcopeise/tracklistify-extended.git
+   cd tracklistify-extended
 
    # Install dependencies using uv
    uv sync

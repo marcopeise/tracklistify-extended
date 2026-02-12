@@ -111,13 +111,15 @@ class TrackIdentificationConfig(BaseConfig):
     # Base config fields are inherited
 
     # Track identification specific fields
-    segment_length: int = field(default=60)
-    min_confidence: float = field(default=0.5)
+    segment_length: int = field(default=90)
+    min_confidence: float = field(default=0.65)
     time_threshold: float = field(default=30.0)
     max_duplicates: int = field(default=2)
-    overlap_duration: int = field(default=10)
+    overlap_duration: int = field(default=5)
     overlap_strategy: str = field(default="weighted")
     min_segment_length: int = field(default=10)
+    min_track_duration: int = field(default=60)
+    keep_segments: bool = field(default=True)  # Keep audio segments after analysis (use 'clean --segments' to remove)
 
     # Provider settings
     primary_provider: str = field(default="shazam")

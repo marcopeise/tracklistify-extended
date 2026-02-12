@@ -173,3 +173,14 @@ examples/
 dev/
 docs/temp/
 coverage.json
+
+# Output and temp folders
+output/
+cache/
+temp/
+tmp/
+segments/
+*.mp3
+*.wav
+*.flac
+*.m4a
