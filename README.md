@@ -46,6 +46,8 @@ A powerful automatic tracklist generator for DJ mixes. Identifies tracks using m
 | set79.com | Automatic URL lookup |
 | 1001tracklists.com | Local HTML file (Cloudflare protected) |
 
+When a 1001tracklists page has no cue times set, tracks are matched by artist/title instead of timestamp.
+
 ### Output Formats
 
 - Markdown with consolidated tracklist and comparison tables
@@ -110,6 +112,8 @@ uv run tracklistify --provider shazam --no-fallback input.mp3
 
 ### Segment Handling
 
+Segments are stored per input (isolated by URL/file hash) so consecutive runs on different mixes never interfere with each other.
+
 ```bash
 # Keep segments after analysis (default)
 uv run tracklistify input.mp3
@@ -130,9 +134,11 @@ uv run tracklistify -f all input.mp3       # All formats
 
 ### Cleanup Command
 
+Running `clean` without flags opens an interactive menu to select what to delete.
+
 ```bash
-# Interactive mode - select what to clean
-uv run tracklistify clean -i
+# Interactive (default when no flags given)
+uv run tracklistify clean
 
 # Clean specific targets
 uv run tracklistify clean --cache      # Download and identification cache
@@ -179,6 +185,7 @@ Precision, Recall, and F1-Score per source against a reference.
 | Issue | Workaround |
 |-------|------------|
 | 1001tracklists Cloudflare | Save page as HTML, use `--1001tracklists file.html` |
+| 1001tracklists no cue times | Handled automatically via name-based matching |
 | AcoustID low recall | Expected for DJ mixes - fingerprints rarely match |
 | set79 not found | Only works if mix URL exists in their database |
 

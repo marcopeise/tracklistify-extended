@@ -173,6 +173,7 @@ examples/
 dev/
 docs/temp/
 coverage.json
+CHANGELOG_SESSION.md
 
 # Output and temp folders
 output/
